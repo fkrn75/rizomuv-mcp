@@ -1,6 +1,7 @@
 # RizomUV MCP Server
 
-Claude 가 **RizomUV** (UV 언랩 자동화 툴) 를 제어할 수 있게 해주는 MCP(Model Context Protocol) 서버입니다.
+> **RizomUV(UV 언랩 툴)를 Claude에서 자연어로 제어하는 MCP 서버.** RizomUVLink(ZMQ) 라이브 소켓으로 실행 중인 RizomUV에 직접 붙어 로드 → 심 컷 → 언폴드 → 패킹 → 저장을 자동화합니다.
+> `execute_command` 로 RizomUV 전체 태스크 API에 접근하고, 구버전은 `-cfi` Lua 배치로 폴백하며, 서브에이전트 동시 사용까지 안전하게 설계됐습니다. (사실상 첫 RizomUV MCP)
 
 저수준 `mcp.server.Server` + stdio transport 패턴 (SubstancePainterMCP 와 동일).
 RizomUV 가 설치되어 있지 않아도 서버 import / 도구 등록 / 헬스 체크가 깨지지 않습니다.
