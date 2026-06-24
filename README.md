@@ -92,6 +92,22 @@ pip install -r requirements.txt
 
 > **전체 기능 접근**: `execute_command` 로 `Optimize`/`Weld`/`IslandGroups`/`SymmetrySet`/`Move`/`Deform`/`Set`/`Get` 등 RizomUV 의 전체 태스크 API 에 라이브로 접근할 수 있습니다. 파라미터 스키마는 설치폴더 `doc/index.html`(공식 API 레퍼런스) 참조.
 
+## 서브에이전트 / 동시 사용 안전성
+
+여러 서브에이전트가 **하나의 MCP 서버 프로세스 = 단일 RizomUV 라이브 세션**을 공유합니다. 이를 안전하게 만드는 장치:
+
+- **호출 직렬화** — 모든 도구 호출은 내부 락(`asyncio.Lock`)으로 원자적으로 처리됩니다. 한 에이전트의 작업이 끝나야 다음 호출이 시작되어, 작업 도중 다른 에이전트가 끼어들어 mesh 상태가 섞이지 않습니다.
+- **stdout 보호** — RizomUV 실행(`Popen`) 시 자식 프로세스가 MCP 의 stdout(JSON-RPC 채널)을 오염시키지 않도록 fd 를 격리합니다(오염되면 전체 연결이 끊김).
+- **cwd 보호** — RizomUVLink 가 바꾸는 작업 디렉터리를 매 실행 후 자동 원복합니다.
+- **자동 정리** — 서버 프로세스 종료 시 RizomUV 인스턴스를 닫아 좀비 프로세스/창을 방지합니다(`atexit`).
+- **무중단 헬스체크** — `check_connection`/`get_info` 는 RizomUV 를 실행하지 않고 상태만 확인하므로 서브에이전트가 안전하게 가용성을 먼저 점검할 수 있습니다.
+
+**권장 사용 패턴(서브에이전트)**
+
+- 가능하면 **원샷 `unwrap_file`**(Load→Cut→Unfold→Pack→Save 한 호출)을 쓰세요. 자체 완결적이라 매 호출이 `Load` 로 시작해 동시 사용에서도 상태 오염이 없습니다.
+- 단계별 도구(`load_mesh` → `unfold_uvs` → …)를 여러 호출로 나누면, 단일 공유 세션 특성상 다른 에이전트 호출이 그 사이에 끼어들 수 있습니다. 멀티에이전트 동시 작업에서는 `unwrap_file` 또는 `execute_command` 로 묶으세요.
+- 끝나면 `close_session()` 으로 창을 닫을 수 있습니다(다음 작업 시 자동 재실행).
+
 ## 파일 구조
 
 ```

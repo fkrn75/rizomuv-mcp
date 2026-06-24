@@ -149,17 +149,54 @@ class RizomUVConnection:
     # Path A — RizomUVLink (live ZMQ)
     # ------------------------------------------------------------------
     def _ensure_link(self):
-        """RizomUVLink 인스턴스를 생성하고 RizomUV 를 실행한다 (필요 시)."""
+        """RizomUVLink 인스턴스를 생성하고 RizomUV 를 실행한다 (필요 시).
+
+        ⚠️ 서브에이전트/MCP 안전장치 — RunRizomUV 는 두 가지 전역 부작용을 일으킨다:
+          (1) RizomUV 를 subprocess.Popen(stdout 상속)으로 띄운다 → RizomUV 가 stdout 에
+              쓰면 MCP stdio(JSON-RPC)가 오염돼 연결이 끊긴다.
+          (2) os.chdir(설치폴더) 로 프로세스 작업 디렉터리를 바꾼다.
+        따라서 실행 구간 동안 fd1(stdout)을 devnull 로 돌리고, 끝나면 cwd 와 stdout 을 원복한다.
+        (보호에 실패해도 예외 없이 degrade — 기능은 계속 동작.)
+        """
         if self._link is not None:
             return self._link
         self._require_exe()
         CRizomUVLink = self._try_import_link()
         link = CRizomUVLink()
+
+        saved_cwd = os.getcwd()
+        saved_stdout_fd = None
+        devnull_fd = None
         try:
-            assigned = link.RunRizomUV()
-        except TypeError:
-            # 일부 버전은 exe 경로를 인자로 받는다
-            assigned = link.RunRizomUV(self.exe_path())
+            try:
+                sys.stdout.flush()
+                saved_stdout_fd = os.dup(1)                 # 진짜 stdout 보관
+                devnull_fd = os.open(os.devnull, os.O_WRONLY)
+                os.dup2(devnull_fd, 1)                       # fd1 → devnull (Popen 이 상속)
+            except Exception:
+                saved_stdout_fd = None                       # 보호 실패 → 그냥 진행
+            try:
+                assigned = link.RunRizomUV()
+            except TypeError:
+                # 일부 버전은 exe 경로를 인자로 받는다
+                assigned = link.RunRizomUV(self.exe_path())
+        finally:
+            if saved_stdout_fd is not None:                  # stdout 원복
+                try:
+                    os.dup2(saved_stdout_fd, 1)
+                    os.close(saved_stdout_fd)
+                except Exception:
+                    pass
+            if devnull_fd is not None:
+                try:
+                    os.close(devnull_fd)
+                except Exception:
+                    pass
+            try:
+                os.chdir(saved_cwd)                          # cwd 원복
+            except Exception:
+                pass
+
         if assigned:
             self.port = assigned
         self._link = link

@@ -15,6 +15,7 @@ Claude 가 RizomUV (UV 언랩 자동화) 를 제어할 수 있게 해주는 MCP 
 """
 
 import json
+import atexit
 import asyncio
 
 from mcp.server import Server
@@ -30,6 +31,19 @@ app = Server("rizomuv-mcp")
 
 # RizomUV 연결 (import 시점에 RizomUV 설치 여부와 무관하게 생성 가능)
 rizom = RizomUVConnection()
+
+# 도구 호출 직렬화 락 — 여러 서브에이전트가 공유 단일 RizomUV 세션을 동시에 건드려도
+# 작업(Load/Cut/Unfold/…)이 서로 섞이지 않도록 모든 call_tool 을 원자적으로 처리한다.
+_tool_lock = asyncio.Lock()
+
+
+# 프로세스 종료 시 RizomUV 라이브 세션을 닫아 좀비 인스턴스를 방지한다(서브에이전트 세션 정리).
+@atexit.register
+def _cleanup_on_exit():
+    try:
+        rizom.quit()
+    except Exception:
+        pass
 
 
 @app.list_tools()
@@ -189,9 +203,8 @@ def _json(payload) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2))]
 
 
-@app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """도구 실행. RizomUVError 는 친절한 JSON 에러로 변환 (크래시 X)."""
+async def _call_tool_impl(name: str, arguments: dict) -> list[TextContent]:
+    """도구 실행 본체. RizomUVError 는 친절한 JSON 에러로 변환 (크래시 X)."""
     try:
         if name == "check_connection":
             status = rizom.check_connection()
@@ -272,6 +285,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return _json({"ok": False, "error": f"Missing required argument: {e}"})
     except Exception as e:  # noqa: BLE001 - 도구는 절대 서버를 죽이면 안 됨
         return _json({"ok": False, "error": f"{type(e).__name__}: {e}"})
+
+
+@app.call_tool()
+async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    """동시 호출을 직렬화(서브에이전트 안전)한 뒤 실제 도구 본체로 위임한다."""
+    async with _tool_lock:
+        return await _call_tool_impl(name, arguments)
 
 
 async def _amain():
