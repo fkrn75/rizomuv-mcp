@@ -9,6 +9,9 @@ RizomUV MCP - Configuration
     RIZOMUV_HOST    라이브 소켓 연결용 호스트 (기본 127.0.0.1)
     RIZOMUV_PORT    라이브 소켓 연결용 포트  (기본 0 = RizomUVLink 가 자동 할당)
     RIZOMUV_TIMEOUT 연결/실행 타임아웃 초 (기본 600)
+    RIZOMUV_POOL_SIZE 인스턴스 풀 최대 크기 — 동시에 띄울 수 있는 RizomUV exe 개수
+                    (기본 2). 각 인스턴스는 독립 RizomUVLink/ZMQ 포트를 가진다.
+                    1 이면 사실상 단일 세션(기존 동작)과 동일하다.
 
 설치 탐지 우선순위 (RIZOMUV_EXE 미지정 시):
     1) RIZOMUV_HOME\\rizomuv.exe
@@ -164,6 +167,12 @@ RIZOMUV_HOST: str = os.environ.get("RIZOMUV_HOST", "127.0.0.1")
 RIZOMUV_PORT: int = int(os.environ.get("RIZOMUV_PORT", "0"))
 RIZOMUV_TIMEOUT: int = int(os.environ.get("RIZOMUV_TIMEOUT", "600"))
 
+# 인스턴스 풀 — 동시에 띄울 수 있는 RizomUV.exe 개수. 각 인스턴스는 full RizomUV 프로세스라
+# RAM/GPU 가 무겁다 → 작은 기본값(2). 항상 >=1 로 클램프(0/음수는 1로).
+RIZOMUV_POOL_SIZE: int = max(1, int(os.environ.get("RIZOMUV_POOL_SIZE", "2")))
+# acquire() 가 빈 인스턴스를 기다리는 최대 초. 풀이 가득 차면 이 시간 뒤 친절한 에러.
+RIZOMUV_ACQUIRE_TIMEOUT: int = int(os.environ.get("RIZOMUV_ACQUIRE_TIMEOUT", "120"))
+
 
 def exe_exists() -> bool:
     """현재 설정된 RizomUV 실행 파일이 실제로 존재하는지 (호출 시점 확인)."""
@@ -223,5 +232,7 @@ def as_dict() -> dict:
         "host": RIZOMUV_HOST,
         "port": RIZOMUV_PORT,
         "timeout": RIZOMUV_TIMEOUT,
+        "pool_size": RIZOMUV_POOL_SIZE,
+        "acquire_timeout": RIZOMUV_ACQUIRE_TIMEOUT,
         "rizomuvlink_dir": rizomuvlink_dir(),
     }

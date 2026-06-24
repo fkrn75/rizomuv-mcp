@@ -28,11 +28,21 @@ import sys
 import json
 import shutil
 import tempfile
+import threading
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
 import config
+
+
+# ⚠️ 프로세스 전역 launch 락 (모든 RizomUVConnection 인스턴스가 공유).
+# RunRizomUV 가 일으키는 os.chdir + os.dup2(stdout fd 1) 는 *프로세스 전역* 부작용이라
+# per-connection 락으로는 보호되지 않는다 — 서로 다른 connection(다른 per-instance 락)이
+# 동시에 launch 하면 같은 cwd/fd1 을 망친다. 따라서 launch 직렬화는 반드시 모듈 전역 락으로.
+# (풀의 _launch_lock 은 풀 경유 호출만 막지만, _probe 등 풀 밖 connection 도 같은 프로세스에서
+#  _ensure_link 를 부를 수 있으므로 권위 있는 직렬화는 여기, 부작용의 발생 지점에 둔다.)
+_LAUNCH_GLOBAL_LOCK = threading.Lock()
 
 
 class RizomUVError(Exception):
@@ -157,50 +167,58 @@ class RizomUVConnection:
           (2) os.chdir(설치폴더) 로 프로세스 작업 디렉터리를 바꾼다.
         따라서 실행 구간 동안 fd1(stdout)을 devnull 로 돌리고, 끝나면 cwd 와 stdout 을 원복한다.
         (보호에 실패해도 예외 없이 degrade — 기능은 계속 동작.)
+
+        ⚠️ 동시성 — 위 (1)(2)+dup2 는 *프로세스 전역* 상태다. 두 connection 이 동시에
+        launch 하면 서로의 cwd/fd1 을 덮어쓴다(check-then-act 레이스). 따라서 launch
+        구간 전체를 모듈 전역 `_LAUNCH_GLOBAL_LOCK` 으로 직렬화한다. 더블체크 패턴으로
+        fast-path(이미 launch 됨)는 락 없이 통과 → 이미 떠 있는 인스턴스의 병렬 작업은 무경합.
         """
-        if self._link is not None:
+        if self._link is not None:                  # fast path — 락 없음(병렬 작업 보존)
             return self._link
-        self._require_exe()
-        CRizomUVLink = self._try_import_link()
-        link = CRizomUVLink()
+        with _LAUNCH_GLOBAL_LOCK:                    # launch 할 때만 경합 → 프로세스 전역 직렬화
+            if self._link is not None:              # 락 안에서 재확인(다른 스레드가 먼저 launch)
+                return self._link
+            self._require_exe()
+            CRizomUVLink = self._try_import_link()
+            link = CRizomUVLink()
 
-        saved_cwd = os.getcwd()
-        saved_stdout_fd = None
-        devnull_fd = None
-        try:
+            saved_cwd = os.getcwd()
+            saved_stdout_fd = None
+            devnull_fd = None
             try:
-                sys.stdout.flush()
-                saved_stdout_fd = os.dup(1)                 # 진짜 stdout 보관
-                devnull_fd = os.open(os.devnull, os.O_WRONLY)
-                os.dup2(devnull_fd, 1)                       # fd1 → devnull (Popen 이 상속)
-            except Exception:
-                saved_stdout_fd = None                       # 보호 실패 → 그냥 진행
-            try:
-                assigned = link.RunRizomUV()
-            except TypeError:
-                # 일부 버전은 exe 경로를 인자로 받는다
-                assigned = link.RunRizomUV(self.exe_path())
-        finally:
-            if saved_stdout_fd is not None:                  # stdout 원복
                 try:
-                    os.dup2(saved_stdout_fd, 1)
-                    os.close(saved_stdout_fd)
+                    sys.stdout.flush()
+                    saved_stdout_fd = os.dup(1)                 # 진짜 stdout 보관
+                    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+                    os.dup2(devnull_fd, 1)                       # fd1 → devnull (Popen 이 상속)
+                except Exception:
+                    saved_stdout_fd = None                       # 보호 실패 → 그냥 진행
+                try:
+                    assigned = link.RunRizomUV()
+                except TypeError:
+                    # 일부 버전은 exe 경로를 인자로 받는다
+                    assigned = link.RunRizomUV(self.exe_path())
+            finally:
+                if saved_stdout_fd is not None:                  # stdout 원복
+                    try:
+                        os.dup2(saved_stdout_fd, 1)
+                        os.close(saved_stdout_fd)
+                    except Exception:
+                        pass
+                if devnull_fd is not None:
+                    try:
+                        os.close(devnull_fd)
+                    except Exception:
+                        pass
+                try:
+                    os.chdir(saved_cwd)                          # cwd 원복
                 except Exception:
                     pass
-            if devnull_fd is not None:
-                try:
-                    os.close(devnull_fd)
-                except Exception:
-                    pass
-            try:
-                os.chdir(saved_cwd)                          # cwd 원복
-            except Exception:
-                pass
 
-        if assigned:
-            self.port = assigned
-        self._link = link
-        return link
+            if assigned:
+                self.port = assigned
+            self._link = link
+            return link
 
     def _path_a_available(self) -> bool:
         try:
