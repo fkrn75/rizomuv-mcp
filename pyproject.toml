@@ -1,0 +1,12 @@
+[project]
+name = "rizomuv-mcp"
+version = "0.1.0"
+description = "MCP server for RizomUV (UV unwrapping automation)"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+    "pyzmq>=24.0.0",
+]
+
+[project.scripts]
+rizomuv-mcp = "server:main"

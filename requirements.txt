@@ -1,0 +1,10 @@
+# RizomUV MCP Server dependencies
+# Architecture confirmed by team-lead: match SubstancePainterMCP exactly —
+# low-level `mcp.server.Server` + stdio transport (NOT FastMCP).
+mcp>=1.0.0
+
+# Path A (primary) = RizomUVLink, which talks to rizomuv.exe over a ZeroMQ socket.
+# The `rizomuvlink` Python module itself ships INSIDE the RizomUV 2022.2+ install
+# dir (also github.com/RemiArq/RizomUVLink) and is imported lazily at runtime.
+# pyzmq is its transport dependency and the piece we must provide in our venv.
+pyzmq>=24.0.0
